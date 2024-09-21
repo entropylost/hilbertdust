@@ -8,11 +8,16 @@ use sefirot::prelude::*;
 use sefirot_testbed::{App, KeyCode};
 
 #[tracked]
+fn falloff(x: Expr<f32>) -> Expr<f32> {
+    1.0 - (1.0 + x).recip()
+}
+
+#[tracked]
 fn color(value: Expr<f32>) -> Expr<Vec3<f32>> {
     Vec3::expr(
-        0.5 - (value * 2.0).cos() / 2.0,
-        value.sin() * 0.3,
-        value.sin(),
+        falloff(value / 2.0) * value,
+        value * 0.3,
+        falloff(value * 0.7) + value * 0.3,
     )
 }
 
@@ -21,12 +26,15 @@ fn color_of(value: Expr<f32>, max_value: Expr<f32>) -> Expr<Vec3<f32>> {
     let value = value * u16::MAX as f32;
     let value = value / max_value;
     let value = (value + 0.1).ln() - 0.1_f32.ln();
-    let value = (value / 5.0).clamp(0.0, 1.0);
+    // let value = (value / 5.0).clamp(0.0, 1.0);
     color(value) * 0.1
 }
 
 fn main() {
-    let app = App::new("Cantor", [2048; 2]).dpi_override(2.0).agx().init();
+    let app = App::new("Hilbertdust", [2048; 2])
+        .dpi_override(2.0)
+        .agx()
+        .init();
     let data = File::open(std::env::args().nth(1).unwrap()).unwrap();
     let data = std::io::BufReader::new(data);
     let mut histo = data.bytes().map(|x| x.unwrap()).collect_vec();
@@ -90,7 +98,7 @@ fn main() {
         }
     ));
 
-    let max_value = 1000.0;
+    let mut max_value = 1000.0;
     // *histo
     //     .select_nth_unstable((histo.len() as f32 - 1.0) as usize)
     //     .1 as f32;
@@ -98,7 +106,7 @@ fn main() {
 
     let mut horiz_angle = PI / 4.0;
     let mut vert_angle = PI / 4.0;
-    let mut scale = 2.5;
+    let mut scale = 4.0;
     let mut auto_rotate = true;
 
     app.run(|rt, scope| {
@@ -130,6 +138,12 @@ fn main() {
         }
         if rt.pressed_key(KeyCode::KeyE) {
             scale *= 0.99;
+        }
+        if rt.pressed_key(KeyCode::KeyZ) {
+            max_value *= 1.1;
+        }
+        if rt.pressed_key(KeyCode::KeyX) {
+            max_value *= 0.9;
         }
 
         let start = FVec3::new(

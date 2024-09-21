@@ -1,8 +1,8 @@
 [package]
-name = "kleindust"
+name = "hilbertdust"
 version = "0.1.0"
 edition = "2021"
-default-run = "kleindust"
+default-run = "hilbertdust"
 
 [dependencies]
 bytemuck = "1.18.0"

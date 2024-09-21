@@ -33,10 +33,13 @@ fn main() {
     let display_size = 2048;
     let sidebar_size = 256;
 
-    let app = App::new("Hilbertdust", [display_size + sidebar_size, display_size])
-        .dpi_override(2.0)
-        .agx()
-        .init();
+    let app = App::new(
+        "Hilbertdust",
+        [display_size + 2 * sidebar_size, display_size],
+    )
+    .dpi_override(2.0)
+    .agx()
+    .init();
     let data = File::open(std::env::args().nth(1).unwrap()).unwrap();
     let data = std::io::BufReader::new(data);
     let data = data.bytes().map(|x| x.unwrap()).collect_vec();
@@ -64,33 +67,35 @@ fn main() {
         histo_buffer.write(index, 0);
     }));
 
-    let display_sidebar_kernel = DEVICE.create_kernel_async::<fn(u32, u32, u32, u32)>(&track!(
-        |stride, vert_stride, view_start, view_end| {
-            #[tracked]
-            fn nearto(x: Expr<u32>) -> Expr<bool> {
-                (dispatch_id().y.cast_i32() - x.cast_i32()).abs() < 5
-            }
+    let display_sidebar_kernel =
+        DEVICE.create_kernel_async::<fn(u32, u32, u32, u32, u32, u32)>(&track!(
+            |stride, vert_stride, view_start, view_end, start, section| {
+                #[tracked]
+                fn nearto(x: Expr<u32>) -> Expr<bool> {
+                    (dispatch_id().y.cast_i32() - x.cast_i32()).abs() < 5
+                }
 
-            let index = dispatch_id().x * stride + dispatch_id().y * vert_stride;
-            let color = if nearto(view_start) || nearto(view_end) {
-                Vec3::expr(0.0, 0.0, 5.0)
-            } else if index < data_buffer.len() as u32 {
-                let value = data_buffer.read(index).cast_f32() / 255.0;
-                value * Vec3::new(0.2, 1.0, 0.2)
-            } else {
-                Vec3::expr(1.0, 0.0, 0.0)
-            };
-            app.display()
-                .write(dispatch_id().xy() + Vec2::new(display_size, 0), color);
-        }
-    ));
+                let index = start + dispatch_id().x * stride + dispatch_id().y * vert_stride;
+                let color = if nearto(view_start) || nearto(view_end) {
+                    Vec3::expr(0.0, 0.0, 5.0)
+                } else if index < data_buffer.len() as u32 {
+                    let value = data_buffer.read(index).cast_f32() / 255.0;
+                    value * Vec3::new(0.2, 1.0, 0.2)
+                } else {
+                    Vec3::expr(1.0, 0.0, 0.0)
+                };
+                app.display().write(
+                    dispatch_id().xy() + Vec2::expr(display_size + sidebar_size * section, 0),
+                    color,
+                );
+            }
+        ));
 
     let trace_kernel = DEVICE.create_kernel_async::<fn(f32, Vec3<f32>, Mat3)>(&track!(
         |color_scale, ray_start, view| {
             let ray_start = ray_start * 128.0 + 128.0;
-            let ray_dir = view
-                * (dispatch_id().xy().cast_f32() - app.display().size().cast_f32() * 0.5)
-                    .extend(1.0);
+            let ray_dir =
+                view * (dispatch_id().xy().cast_f32() - display_size as f32 * 0.5).extend(1.0);
             let ray_dir = ray_dir.normalize();
 
             let t0 = (0.01 - ray_start) / ray_dir;
@@ -153,7 +158,11 @@ fn main() {
     let mut auto_rotate = true;
     let mut update_display = true;
     let sidebar_stride = 1;
-    let mut sidebar_vert_stride = sidebar_size;
+    let second_view_vert_stride =
+        sidebar_size * ((data_buffer.len() as f32 * 1.05) as u32 / sidebar_size / display_size);
+    let mut sidebar_vert_stride =
+        ((data_buffer.len() as u32 / sidebar_size / display_size) * sidebar_size).max(sidebar_size);
+    let mut second_view = 0..data_buffer.len();
     let mut data_view = 0..data_buffer.len();
     let mut seeking = false;
 
@@ -193,15 +202,20 @@ fn main() {
         if rt.pressed_key(KeyCode::KeyX) {
             max_value *= 0.9;
         }
-        if rt.pressed_key(KeyCode::BracketLeft) {
-            sidebar_vert_stride = (sidebar_vert_stride - sidebar_size).max(sidebar_size);
-        }
-        if rt.pressed_key(KeyCode::BracketRight) {
-            sidebar_vert_stride += sidebar_size;
-        }
         if rt.pressed_button(MouseButton::Left) {
             let pos = rt.cursor_position;
-            if pos.x > display_size as f32 {
+            if pos.x > display_size as f32 + sidebar_size as f32 {
+                let index = pos.y as usize * second_view_vert_stride as usize;
+                if index < data_buffer.len() as usize {
+                    second_view.start = index;
+                    second_view.end = second_view
+                        .end
+                        .max(second_view.start + display_size as usize * sidebar_size as usize);
+                    sidebar_vert_stride =
+                        ((second_view.len() as u32 / sidebar_size / display_size) * sidebar_size)
+                            .max(sidebar_size);
+                }
+            } else if pos.x > display_size as f32 {
                 let index = pos.y as usize * sidebar_vert_stride as usize;
                 if index < data_buffer.len() as usize {
                     data_view.start = index;
@@ -212,13 +226,26 @@ fn main() {
         }
         if rt.pressed_button(MouseButton::Right) {
             let pos = rt.cursor_position;
-            if pos.x > display_size as f32 {
+            if pos.x > display_size as f32 + sidebar_size as f32 {
+                let index = pos.y as usize * second_view_vert_stride as usize;
+                if index < data_buffer.len() as usize {
+                    second_view.end = index;
+                    second_view.start = second_view.start.min(
+                        second_view
+                            .end
+                            .saturating_sub(display_size as usize * sidebar_size as usize),
+                    );
+                    sidebar_vert_stride =
+                        ((second_view.len() as u32 / sidebar_size / display_size) * sidebar_size)
+                            .max(sidebar_size);
+                }
+            } else if pos.x > display_size as f32 {
                 let index = pos.y as usize * sidebar_vert_stride as usize;
                 if index < data_buffer.len() as usize {
                     data_view.end = index;
                     data_view.start = data_view
-                        .start
-                        .min(data_view.end.saturating_sub(sidebar_size as usize));
+                        .end
+                        .min(data_view.start.saturating_sub(sidebar_size as usize));
                     update_display = true;
                 }
             }
@@ -269,6 +296,17 @@ fn main() {
                 &sidebar_vert_stride,
                 &(data_view.start as u32 / sidebar_vert_stride),
                 &(data_view.end as u32 / sidebar_vert_stride),
+                &(second_view.start as u32),
+                &0,
+            ),
+            display_sidebar_kernel.dispatch_async(
+                [sidebar_size, display_size, 1],
+                &sidebar_stride,
+                &second_view_vert_stride,
+                &(second_view.start as u32 / second_view_vert_stride),
+                &(second_view.end as u32 / second_view_vert_stride),
+                &0,
+                &1,
             ),
             trace_kernel.dispatch_async([display_size, display_size, 1], &max_value, &start, &view),
         ]);

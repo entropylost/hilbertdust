@@ -1,9 +1,8 @@
 use std::{f32::consts::PI, fs::File, io::Read};
 
-use bytemuck::cast_slice_mut;
 use glam::{Vec3 as FVec3, Vec3Swizzles};
 use itertools::Itertools;
-use luisa::lang::types::vector::{Mat3, Vec3};
+use luisa::lang::types::vector::{Mat3, Vec2, Vec3};
 use sefirot::prelude::*;
 use sefirot_testbed::{App, KeyCode};
 
@@ -22,8 +21,8 @@ fn color(value: Expr<f32>) -> Expr<Vec3<f32>> {
 }
 
 #[tracked]
-fn color_of(value: Expr<f32>, max_value: Expr<f32>) -> Expr<Vec3<f32>> {
-    let value = value * u16::MAX as f32;
+fn color_of(value: Expr<u32>, max_value: Expr<f32>) -> Expr<Vec3<f32>> {
+    let value = value.cast_f32();
     let value = value / max_value;
     let value = (value + 0.1).ln() - 0.1_f32.ln();
     // let value = (value / 5.0).clamp(0.0, 1.0);
@@ -31,16 +30,52 @@ fn color_of(value: Expr<f32>, max_value: Expr<f32>) -> Expr<Vec3<f32>> {
 }
 
 fn main() {
-    let app = App::new("Hilbertdust", [2048; 2])
+    let display_size = 2048;
+    let sidebar_size = 256;
+
+    let app = App::new("Hilbertdust", [display_size + sidebar_size, display_size])
         .dpi_override(2.0)
         .agx()
         .init();
     let data = File::open(std::env::args().nth(1).unwrap()).unwrap();
     let data = std::io::BufReader::new(data);
-    let mut histo = data.bytes().map(|x| x.unwrap()).collect_vec();
-    let histo = cast_slice_mut::<u8, u16>(&mut histo);
-    let texture = DEVICE.create_tex3d::<f32>(PixelStorage::Short1, 256, 256, 256, 1);
-    texture.view(0).copy_from(histo);
+    let data = data.bytes().map(|x| x.unwrap()).collect_vec();
+    let data_buffer = DEVICE.create_buffer_from_slice(&data);
+
+    let histo_buffer = DEVICE.create_buffer::<u32>(256 * 256 * 256);
+
+    let update_histo_kernel =
+        DEVICE.create_kernel_async::<fn(Buffer<u8>, u32)>(&track!(|data, stride| {
+            let index = dispatch_id().x * stride;
+            let a = data.read(index).cast_u32();
+            let b = data.read(index + 1).cast_u32();
+            let c = data.read(index + 2).cast_u32();
+            histo_buffer
+                .atomic_ref(a + b * 256 + c * 65536)
+                .fetch_add(1);
+        }));
+
+    let texture = DEVICE.create_tex3d::<u32>(PixelStorage::Int1, 256, 256, 256, 1);
+
+    let copy_texture_kernel = DEVICE.create_kernel_async::<fn()>(&track!(|| {
+        let id = dispatch_id();
+        let index = id.x + id.y * 256 + id.z * 65536;
+        texture.write(id, histo_buffer.read(index));
+        histo_buffer.write(index, 0);
+    }));
+
+    let display_sidebar_kernel =
+        DEVICE.create_kernel_async::<fn(u32, u32)>(&track!(|stride, vert_stride| {
+            let index = dispatch_id().x * stride + dispatch_id().y * sidebar_size * vert_stride;
+            let color = if index < data_buffer.len() as u32 {
+                let value = data_buffer.read(index).cast_f32() / 255.0;
+                value * Vec3::new(0.2, 1.0, 0.2)
+            } else {
+                Vec3::expr(1.0, 0.0, 0.0)
+            };
+            app.display()
+                .write(dispatch_id().xy() + Vec2::new(display_size, 0), color);
+        }));
 
     let trace_kernel = DEVICE.create_kernel_async::<fn(f32, Vec3<f32>, Mat3)>(&track!(
         |color_scale, ray_start, view| {
@@ -108,6 +143,9 @@ fn main() {
     let mut vert_angle = PI / 4.0;
     let mut scale = 4.0;
     let mut auto_rotate = true;
+    let mut update_display = true;
+    let mut sidebar_stride = 1;
+    let mut sidebar_vert_stride = 1;
 
     app.run(|rt, scope| {
         if rt.pressed_key(KeyCode::KeyR) {
@@ -145,6 +183,12 @@ fn main() {
         if rt.pressed_key(KeyCode::KeyX) {
             max_value *= 0.9;
         }
+        if rt.pressed_key(KeyCode::BracketLeft) {
+            sidebar_vert_stride = (sidebar_vert_stride - 1).max(1);
+        }
+        if rt.pressed_key(KeyCode::BracketRight) {
+            sidebar_vert_stride += 1;
+        }
 
         let start = FVec3::new(
             horiz_angle.sin() * vert_angle.cos(),
@@ -154,16 +198,32 @@ fn main() {
         let forward = -start.normalize();
         let right = forward.xy().perp().extend(0.0).normalize();
         let down = right.cross(forward).normalize();
-        let ratio = (fov / 2.0).tan() / (rt.display().height() as f32 / 2.0);
+        let ratio = (fov / 2.0).tan() / (display_size as f32 / 2.0);
 
         let start = Vec3::from(start);
         let view: Mat3 = glam::Mat3::from_cols(right * ratio, down * ratio, forward).into();
 
-        scope.submit([trace_kernel.dispatch_async(
-            [rt.display().width(), rt.display().height(), 1],
-            &max_value,
-            &start,
-            &view,
-        )]);
+        if update_display {
+            let data_view = 0..data_buffer.len();
+            let stride = 1;
+            scope.submit([
+                update_histo_kernel.dispatch_async(
+                    [(data_view.len() - 3) as u32 / stride, 1, 1],
+                    &data_buffer.view(data_view),
+                    &stride,
+                ),
+                copy_texture_kernel.dispatch_async([256, 256, 256]),
+            ]);
+            update_display = false;
+        }
+
+        scope.submit([
+            display_sidebar_kernel.dispatch_async(
+                [sidebar_size, display_size, 1],
+                &sidebar_stride,
+                &sidebar_vert_stride,
+            ),
+            trace_kernel.dispatch_async([display_size, display_size, 1], &max_value, &start, &view),
+        ]);
     })
 }

@@ -4,7 +4,7 @@ use glam::{Vec3 as FVec3, Vec3Swizzles};
 use itertools::Itertools;
 use luisa::lang::types::vector::{Mat3, Vec2, Vec3};
 use sefirot::prelude::*;
-use sefirot_testbed::{App, KeyCode};
+use sefirot_testbed::{App, KeyCode, MouseButton};
 
 #[tracked]
 fn falloff(x: Expr<f32>) -> Expr<f32> {
@@ -64,10 +64,17 @@ fn main() {
         histo_buffer.write(index, 0);
     }));
 
-    let display_sidebar_kernel =
-        DEVICE.create_kernel_async::<fn(u32, u32)>(&track!(|stride, vert_stride| {
-            let index = dispatch_id().x * stride + dispatch_id().y * sidebar_size * vert_stride;
-            let color = if index < data_buffer.len() as u32 {
+    let display_sidebar_kernel = DEVICE.create_kernel_async::<fn(u32, u32, u32, u32)>(&track!(
+        |stride, vert_stride, view_start, view_end| {
+            #[tracked]
+            fn nearto(x: Expr<u32>) -> Expr<bool> {
+                (dispatch_id().y.cast_i32() - x.cast_i32()).abs() < 5
+            }
+
+            let index = dispatch_id().x * stride + dispatch_id().y * vert_stride;
+            let color = if nearto(view_start) || nearto(view_end) {
+                Vec3::expr(0.0, 0.0, 5.0)
+            } else if index < data_buffer.len() as u32 {
                 let value = data_buffer.read(index).cast_f32() / 255.0;
                 value * Vec3::new(0.2, 1.0, 0.2)
             } else {
@@ -75,7 +82,8 @@ fn main() {
             };
             app.display()
                 .write(dispatch_id().xy() + Vec2::new(display_size, 0), color);
-        }));
+        }
+    ));
 
     let trace_kernel = DEVICE.create_kernel_async::<fn(f32, Vec3<f32>, Mat3)>(&track!(
         |color_scale, ray_start, view| {
@@ -144,11 +152,13 @@ fn main() {
     let mut scale = 4.0;
     let mut auto_rotate = true;
     let mut update_display = true;
-    let mut sidebar_stride = 1;
-    let mut sidebar_vert_stride = 1;
+    let sidebar_stride = 1;
+    let mut sidebar_vert_stride = sidebar_size;
+    let mut data_view = 0..data_buffer.len();
+    let mut seeking = false;
 
     app.run(|rt, scope| {
-        if rt.pressed_key(KeyCode::KeyR) {
+        if rt.just_pressed_key(KeyCode::KeyR) {
             auto_rotate = !auto_rotate;
         }
         if auto_rotate {
@@ -184,10 +194,46 @@ fn main() {
             max_value *= 0.9;
         }
         if rt.pressed_key(KeyCode::BracketLeft) {
-            sidebar_vert_stride = (sidebar_vert_stride - 1).max(1);
+            sidebar_vert_stride = (sidebar_vert_stride - sidebar_size).max(sidebar_size);
         }
         if rt.pressed_key(KeyCode::BracketRight) {
-            sidebar_vert_stride += 1;
+            sidebar_vert_stride += sidebar_size;
+        }
+        if rt.pressed_button(MouseButton::Left) {
+            let pos = rt.cursor_position;
+            if pos.x > display_size as f32 {
+                let index = pos.y as usize * sidebar_vert_stride as usize;
+                if index < data_buffer.len() as usize {
+                    data_view.start = index;
+                    data_view.end = data_view.end.max(data_view.start + sidebar_size as usize);
+                    update_display = true;
+                }
+            }
+        }
+        if rt.pressed_button(MouseButton::Right) {
+            let pos = rt.cursor_position;
+            if pos.x > display_size as f32 {
+                let index = pos.y as usize * sidebar_vert_stride as usize;
+                if index < data_buffer.len() as usize {
+                    data_view.end = index;
+                    data_view.start = data_view
+                        .start
+                        .min(data_view.end.saturating_sub(sidebar_size as usize));
+                    update_display = true;
+                }
+            }
+        }
+        if rt.just_pressed_key(KeyCode::Backslash) {
+            seeking = !seeking;
+        }
+        if seeking {
+            data_view.start += sidebar_vert_stride as usize;
+            data_view.end += sidebar_vert_stride as usize;
+            update_display = true;
+            data_view.end = data_view.end.min(data_buffer.len());
+            data_view.start = data_view
+                .start
+                .min(data_view.end.saturating_sub(sidebar_size as usize));
         }
 
         let start = FVec3::new(
@@ -204,12 +250,11 @@ fn main() {
         let view: Mat3 = glam::Mat3::from_cols(right * ratio, down * ratio, forward).into();
 
         if update_display {
-            let data_view = 0..data_buffer.len();
             let stride = 1;
             scope.submit([
                 update_histo_kernel.dispatch_async(
                     [(data_view.len() - 3) as u32 / stride, 1, 1],
-                    &data_buffer.view(data_view),
+                    &data_buffer.view(data_view.clone()),
                     &stride,
                 ),
                 copy_texture_kernel.dispatch_async([256, 256, 256]),
@@ -222,6 +267,8 @@ fn main() {
                 [sidebar_size, display_size, 1],
                 &sidebar_stride,
                 &sidebar_vert_stride,
+                &(data_view.start as u32 / sidebar_vert_stride),
+                &(data_view.end as u32 / sidebar_vert_stride),
             ),
             trace_kernel.dispatch_async([display_size, display_size, 1], &max_value, &start, &view),
         ]);

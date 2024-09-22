@@ -176,9 +176,9 @@ fn main() {
     let mut update_display = true;
     let sidebar_stride = 1;
     let second_view_vert_stride =
-        sidebar_size * (data_len as u32 / sidebar_size / display_size) + sidebar_size;
+        sidebar_size * (data_len as u32).div_ceil(sidebar_size * display_size);
     let mut sidebar_vert_stride =
-        sidebar_size * (data_len as u32 / sidebar_size / display_size) + sidebar_size;
+        sidebar_size * (data_len as u32).div_ceil(sidebar_size * display_size);
     let mut second_view = 0..data_len;
     let mut data_view = 0..data_len;
     let mut seeking = false;
@@ -242,9 +242,8 @@ fn main() {
                     .end
                     .max(second_view.start + display_size as usize * sidebar_size as usize)
                     .min(data_len);
-                sidebar_vert_stride = sidebar_size
-                    * (second_view.len() as u32 / sidebar_size / display_size)
-                    + sidebar_size;
+                sidebar_vert_stride =
+                    sidebar_size * (second_view.len() as u32).div_ceil(sidebar_size * display_size);
             } else if pos.x > display_size as f32 {
                 let index = pos.y as usize * sidebar_vert_stride as usize + second_view.start;
                 let index = index.min(data_len);
@@ -267,9 +266,8 @@ fn main() {
                         .end
                         .saturating_sub(display_size as usize * sidebar_size as usize),
                 );
-                sidebar_vert_stride = sidebar_size
-                    * (second_view.len() as u32 / sidebar_size / display_size)
-                    + sidebar_size;
+                sidebar_vert_stride =
+                    sidebar_size * (second_view.len() as u32).div_ceil(sidebar_size * display_size);
             } else if pos.x > display_size as f32 {
                 let index = pos.y as usize * sidebar_vert_stride as usize + second_view.start;
                 let index = index.min(data_len);

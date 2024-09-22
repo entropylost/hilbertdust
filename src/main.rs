@@ -35,14 +35,16 @@ fn main() {
 
     let app = App::new(
         "Hilbertdust",
-        [display_size + 2 * sidebar_size, display_size],
+        [display_size + 2 * sidebar_size + 64, display_size],
     )
     .dpi_override(2.0)
     .agx()
     .init();
     let data = File::open(std::env::args().nth(1).unwrap()).unwrap();
     let data = std::io::BufReader::new(data);
-    let data = data.bytes().map(|x| x.unwrap()).collect_vec();
+    let mut data = data.bytes().map(|x| x.unwrap()).collect_vec();
+    let data_len = data.len();
+    data.extend(std::iter::repeat(0).take(256));
     let data_buffer = DEVICE.create_buffer_from_slice(&data);
 
     let histo_buffer = DEVICE.create_buffer::<u32>(256 * 256 * 256);
@@ -57,8 +59,24 @@ fn main() {
                 .atomic_ref(a + b * 256 + c * 65536)
                 .fetch_add(1);
         }));
+    let update_histo_slices_kernel = DEVICE.create_kernel_async::<fn(Buffer<u8>, u32, u32)>(
+        &track!(|data, stride, time_stride| {
+            let index = dispatch_id().x * stride + dispatch_id().y * time_stride;
+            let a = data.read(index).cast_u32();
+            let b = data.read(index + 1).cast_u32();
+            histo_buffer
+                .atomic_ref(a + b * 256 + dispatch_id().y * 65536)
+                .fetch_add(1);
+        }),
+    );
 
     let texture = DEVICE.create_tex3d::<u32>(PixelStorage::Int1, 256, 256, 256, 1);
+
+    let draw_square_kernel =
+        DEVICE.create_kernel_async::<fn(Vec2<u32>, Vec3<f32>)>(&track!(|offset, color| {
+            let pos = dispatch_id().xy() + offset;
+            app.display().write(pos, color);
+        }));
 
     let copy_texture_kernel = DEVICE.create_kernel_async::<fn()>(&track!(|| {
         let id = dispatch_id();
@@ -68,17 +86,19 @@ fn main() {
     }));
 
     let display_sidebar_kernel =
-        DEVICE.create_kernel_async::<fn(u32, u32, u32, u32, u32, u32)>(&track!(
+        DEVICE.create_kernel_async::<fn(u32, u32, i32, i32, u32, u32)>(&track!(
             |stride, vert_stride, view_start, view_end, start, section| {
                 #[tracked]
-                fn nearto(x: Expr<u32>) -> Expr<bool> {
-                    (dispatch_id().y.cast_i32() - x.cast_i32()).abs() < 5
+                fn nearto(x: Expr<i32>) -> Expr<bool> {
+                    (dispatch_id().y.cast_i32() - x).abs() < 5
                 }
 
                 let index = start + dispatch_id().x * stride + dispatch_id().y * vert_stride;
-                let color = if nearto(view_start) || nearto(view_end) {
+                let color = if nearto(view_start / vert_stride.cast_i32())
+                    || nearto(view_end / vert_stride.cast_i32())
+                {
                     Vec3::expr(0.0, 0.0, 5.0)
-                } else if index < data_buffer.len() as u32 {
+                } else if index < data_len as u32 {
                     let value = data_buffer.read(index).cast_f32() / 255.0;
                     value * Vec3::new(0.2, 1.0, 0.2)
                 } else {
@@ -147,9 +167,6 @@ fn main() {
     ));
 
     let mut max_value = 1000.0;
-    // *histo
-    //     .select_nth_unstable((histo.len() as f32 - 1.0) as usize)
-    //     .1 as f32;
     let fov = 0.9_f32;
 
     let mut horiz_angle = PI / 4.0;
@@ -159,12 +176,14 @@ fn main() {
     let mut update_display = true;
     let sidebar_stride = 1;
     let second_view_vert_stride =
-        sidebar_size * ((data_buffer.len() as f32 * 1.05) as u32 / sidebar_size / display_size);
+        sidebar_size * ((data_len as f32 * 1.05) as u32 / sidebar_size / display_size);
     let mut sidebar_vert_stride =
-        ((data_buffer.len() as u32 / sidebar_size / display_size) * sidebar_size).max(sidebar_size);
-    let mut second_view = 0..data_buffer.len();
-    let mut data_view = 0..data_buffer.len();
+        ((data_len as u32 / sidebar_size / display_size) * sidebar_size).max(sidebar_size);
+    let mut second_view = 0..data_len;
+    let mut data_view = 0..data_len;
     let mut seeking = false;
+    let mut data_stride = 1;
+    let mut use_slices = false;
 
     app.run(|rt, scope| {
         if rt.just_pressed_key(KeyCode::KeyR) {
@@ -202,11 +221,22 @@ fn main() {
         if rt.pressed_key(KeyCode::KeyX) {
             max_value *= 0.9;
         }
+        if rt.just_pressed_key(KeyCode::Period) {
+            data_stride += 1;
+            if data_stride > 4 {
+                data_stride = 1;
+            }
+            update_display = true;
+        }
+        if rt.just_pressed_key(KeyCode::Space) {
+            use_slices = !use_slices;
+            update_display = true;
+        }
         if rt.pressed_button(MouseButton::Left) {
             let pos = rt.cursor_position;
             if pos.x > display_size as f32 + sidebar_size as f32 {
                 let index = pos.y as usize * second_view_vert_stride as usize;
-                if index < data_buffer.len() as usize {
+                if index < data_len {
                     second_view.start = index;
                     second_view.end = second_view
                         .end
@@ -216,8 +246,8 @@ fn main() {
                             .max(sidebar_size);
                 }
             } else if pos.x > display_size as f32 {
-                let index = pos.y as usize * sidebar_vert_stride as usize;
-                if index < data_buffer.len() as usize {
+                let index = pos.y as usize * sidebar_vert_stride as usize + second_view.start;
+                if index < data_len {
                     data_view.start = index;
                     data_view.end = data_view.end.max(data_view.start + sidebar_size as usize);
                     update_display = true;
@@ -228,7 +258,7 @@ fn main() {
             let pos = rt.cursor_position;
             if pos.x > display_size as f32 + sidebar_size as f32 {
                 let index = pos.y as usize * second_view_vert_stride as usize;
-                if index < data_buffer.len() as usize {
+                if index < data_len {
                     second_view.end = index;
                     second_view.start = second_view.start.min(
                         second_view
@@ -240,8 +270,8 @@ fn main() {
                             .max(sidebar_size);
                 }
             } else if pos.x > display_size as f32 {
-                let index = pos.y as usize * sidebar_vert_stride as usize;
-                if index < data_buffer.len() as usize {
+                let index = pos.y as usize * sidebar_vert_stride as usize + second_view.start;
+                if index < data_len {
                     data_view.end = index;
                     data_view.start = data_view
                         .end
@@ -257,7 +287,7 @@ fn main() {
             data_view.start += sidebar_vert_stride as usize;
             data_view.end += sidebar_vert_stride as usize;
             update_display = true;
-            data_view.end = data_view.end.min(data_buffer.len());
+            data_view.end = data_view.end.min(data_len);
             data_view.start = data_view
                 .start
                 .min(data_view.end.saturating_sub(sidebar_size as usize));
@@ -277,16 +307,43 @@ fn main() {
         let view: Mat3 = glam::Mat3::from_cols(right * ratio, down * ratio, forward).into();
 
         if update_display {
-            let stride = 1;
-            scope.submit([
-                update_histo_kernel.dispatch_async(
-                    [(data_view.len() - 3) as u32 / stride, 1, 1],
-                    &data_buffer.view(data_view.clone()),
-                    &stride,
-                ),
-                copy_texture_kernel.dispatch_async([256, 256, 256]),
-            ]);
+            if use_slices {
+                let time_stride = data_view.len() as u32 / 256;
+                scope.submit([
+                    update_histo_slices_kernel.dispatch_async(
+                        [data_view.len() as u32 / data_stride / 256, 256, 1],
+                        &data_buffer.view(data_view.start..),
+                        &data_stride,
+                        &time_stride,
+                    ),
+                    copy_texture_kernel.dispatch_async([256, 256, 256]),
+                ]);
+            } else {
+                scope.submit([
+                    update_histo_kernel.dispatch_async(
+                        [data_view.len() as u32 / data_stride, 1, 1],
+                        &data_buffer.view(data_view.start..),
+                        &data_stride,
+                    ),
+                    copy_texture_kernel.dispatch_async([256, 256, 256]),
+                ]);
+            }
             update_display = false;
+        }
+
+        scope.submit((0..data_stride).map(|i| {
+            draw_square_kernel.dispatch_async(
+                [48, 48, 1],
+                &Vec2::new(display_size + 2 * sidebar_size + 8, 8 + i * 56),
+                &Vec3::splat(1.0),
+            )
+        }));
+        if use_slices {
+            scope.submit([draw_square_kernel.dispatch_async(
+                [48, 48, 1],
+                &Vec2::new(display_size + 2 * sidebar_size + 8, display_size - 48 - 8),
+                &Vec3::new(1.0, 0.0, 0.0),
+            )]);
         }
 
         scope.submit([
@@ -294,8 +351,8 @@ fn main() {
                 [sidebar_size, display_size, 1],
                 &sidebar_stride,
                 &sidebar_vert_stride,
-                &(data_view.start as u32 / sidebar_vert_stride),
-                &(data_view.end as u32 / sidebar_vert_stride),
+                &(data_view.start as i32 - second_view.start as i32),
+                &(data_view.end as i32 - second_view.start as i32),
                 &(second_view.start as u32),
                 &0,
             ),
@@ -303,8 +360,8 @@ fn main() {
                 [sidebar_size, display_size, 1],
                 &sidebar_stride,
                 &second_view_vert_stride,
-                &(second_view.start as u32 / second_view_vert_stride),
-                &(second_view.end as u32 / second_view_vert_stride),
+                &(second_view.start as i32),
+                &(second_view.end as i32),
                 &0,
                 &1,
             ),

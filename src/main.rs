@@ -186,6 +186,9 @@ fn main() {
     let mut use_slices = false;
 
     app.run(|rt, scope| {
+        if rt.just_pressed_key(KeyCode::Enter) {
+            println!("View: {:?}", data_view);
+        }
         if rt.just_pressed_key(KeyCode::KeyR) {
             auto_rotate = !auto_rotate;
         }
@@ -203,11 +206,11 @@ fn main() {
         }
         if rt.pressed_key(KeyCode::KeyW) {
             vert_angle -= 0.01;
-            vert_angle = vert_angle.clamp(-PI / 2.0 + 0.001, PI / 2.0 + 0.001);
+            vert_angle = vert_angle.clamp(-PI / 2.0 + 0.001, PI / 2.0 - 0.001);
         }
         if rt.pressed_key(KeyCode::KeyS) {
             vert_angle += 0.01;
-            vert_angle = vert_angle.clamp(-PI / 2.0 + 0.001, PI / 2.0 + 0.001);
+            vert_angle = vert_angle.clamp(-PI / 2.0 + 0.001, PI / 2.0 - 0.001);
         }
         if rt.pressed_key(KeyCode::KeyQ) {
             scale *= 1.01;

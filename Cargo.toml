@@ -8,5 +8,7 @@ default-run = "hilbertdust"
 bytemuck = "1.18.0"
 glam = "0.27.0"
 itertools = "0.13.0"
-sefirot = { path = "../sefirot/sefirot", features = ["glam"] }
-sefirot_testbed = { path = "../sefirot/testbed" }
+sefirot = { git = "https://github.com/entropylost/sefirot", features = [
+    "glam",
+] }
+sefirot_testbed = { git = "https://github.com/entropylost/sefirot" }

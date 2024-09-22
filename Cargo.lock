@@ -660,6 +660,7 @@ dependencies = [
 [[package]]
 name = "id_newtype"
 version = "0.1.0"
+source = "git+https://github.com/entropylost/sefirot#345bdd19529c5e2f027377b98fdc3977400cc3d7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1341,6 +1342,7 @@ dependencies = [
 [[package]]
 name = "sefirot"
 version = "0.1.0"
+source = "git+https://github.com/entropylost/sefirot#345bdd19529c5e2f027377b98fdc3977400cc3d7"
 dependencies = [
  "dashmap",
  "dyn-clone",
@@ -1360,6 +1362,7 @@ dependencies = [
 [[package]]
 name = "sefirot_macro"
 version = "0.1.0"
+source = "git+https://github.com/entropylost/sefirot#345bdd19529c5e2f027377b98fdc3977400cc3d7"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",
@@ -1370,6 +1373,7 @@ dependencies = [
 [[package]]
 name = "sefirot_testbed"
 version = "0.1.0"
+source = "git+https://github.com/entropylost/sefirot#345bdd19529c5e2f027377b98fdc3977400cc3d7"
 dependencies = [
  "sefirot",
  "winit",

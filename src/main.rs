@@ -146,11 +146,6 @@ fn main() {
             let color = Vec3::splat(0.0_f32).var();
 
             for _i in 0_u32.expr()..1000_u32.expr() {
-                let mask = side_dist <= luisa::min(side_dist.yzx(), side_dist.zxy());
-
-                *side_dist += mask.select(delta_dist, Vec3::splat_expr(0.0));
-                *pos += mask.select(ray_step, Vec3::splat_expr(0_i32));
-
                 let next_t = side_dist.reduce_min();
 
                 if next_t > tmax - tmin {
@@ -160,6 +155,11 @@ fn main() {
                 let value = texture.read(pos.cast_u32());
 
                 *color += color_of(value, color_scale);
+
+                let mask = side_dist <= luisa::min(side_dist.yzx(), side_dist.zxy());
+
+                *side_dist += mask.select(delta_dist, Vec3::splat_expr(0.0));
+                *pos += mask.select(ray_step, Vec3::splat_expr(0_i32));
             }
 
             app.display().write(dispatch_id().xy(), color);
@@ -288,9 +288,10 @@ fn main() {
             data_view.end += sidebar_vert_stride as usize;
             update_display = true;
             data_view.end = data_view.end.min(data_len);
-            data_view.start = data_view
-                .start
-                .min(data_view.end.saturating_sub(sidebar_size as usize));
+            // if data_view.end == data_len {
+            //     seeking = false;
+            // }
+            data_view.start = data_view.start.min(data_view.end);
         }
 
         let start = FVec3::new(

@@ -274,8 +274,8 @@ fn main() {
                 if index < data_len {
                     data_view.end = index;
                     data_view.start = data_view
-                        .end
-                        .min(data_view.start.saturating_sub(sidebar_size as usize));
+                        .start
+                        .min(data_view.end.saturating_sub(sidebar_size as usize));
                     update_display = true;
                 }
             }

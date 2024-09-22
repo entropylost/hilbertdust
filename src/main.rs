@@ -176,9 +176,9 @@ fn main() {
     let mut update_display = true;
     let sidebar_stride = 1;
     let second_view_vert_stride =
-        sidebar_size * ((data_len as f32 * 1.05) as u32 / sidebar_size / display_size);
+        sidebar_size * (data_len as u32 / sidebar_size / display_size) + sidebar_size;
     let mut sidebar_vert_stride =
-        ((data_len as u32 / sidebar_size / display_size) * sidebar_size).max(sidebar_size);
+        sidebar_size * (data_len as u32 / sidebar_size / display_size) + sidebar_size;
     let mut second_view = 0..data_len;
     let mut data_view = 0..data_len;
     let mut seeking = false;
@@ -236,48 +236,44 @@ fn main() {
             let pos = rt.cursor_position;
             if pos.x > display_size as f32 + sidebar_size as f32 {
                 let index = pos.y as usize * second_view_vert_stride as usize;
-                if index < data_len {
-                    second_view.start = index;
-                    second_view.end = second_view
-                        .end
-                        .max(second_view.start + display_size as usize * sidebar_size as usize);
-                    sidebar_vert_stride =
-                        ((second_view.len() as u32 / sidebar_size / display_size) * sidebar_size)
-                            .max(sidebar_size);
-                }
+                let index = index.min(data_len);
+                second_view.start = index;
+                second_view.end = second_view
+                    .end
+                    .max(second_view.start + display_size as usize * sidebar_size as usize);
+                sidebar_vert_stride = sidebar_size
+                    * (second_view.len() as u32 / sidebar_size / display_size)
+                    + sidebar_size;
             } else if pos.x > display_size as f32 {
                 let index = pos.y as usize * sidebar_vert_stride as usize + second_view.start;
-                if index < data_len {
-                    data_view.start = index;
-                    data_view.end = data_view.end.max(data_view.start + sidebar_size as usize);
-                    update_display = true;
-                }
+                let index = index.min(data_len);
+                data_view.start = index;
+                data_view.end = data_view.end.max(data_view.start + sidebar_size as usize);
+                update_display = true;
             }
         }
         if rt.pressed_button(MouseButton::Right) {
             let pos = rt.cursor_position;
             if pos.x > display_size as f32 + sidebar_size as f32 {
                 let index = pos.y as usize * second_view_vert_stride as usize;
-                if index < data_len {
-                    second_view.end = index;
-                    second_view.start = second_view.start.min(
-                        second_view
-                            .end
-                            .saturating_sub(display_size as usize * sidebar_size as usize),
-                    );
-                    sidebar_vert_stride =
-                        ((second_view.len() as u32 / sidebar_size / display_size) * sidebar_size)
-                            .max(sidebar_size);
-                }
+                let index = index.min(data_len);
+                second_view.end = index;
+                second_view.start = second_view.start.min(
+                    second_view
+                        .end
+                        .saturating_sub(display_size as usize * sidebar_size as usize),
+                );
+                sidebar_vert_stride = sidebar_size
+                    * (second_view.len() as u32 / sidebar_size / display_size)
+                    + sidebar_size;
             } else if pos.x > display_size as f32 {
                 let index = pos.y as usize * sidebar_vert_stride as usize + second_view.start;
-                if index < data_len {
-                    data_view.end = index;
-                    data_view.start = data_view
-                        .start
-                        .min(data_view.end.saturating_sub(sidebar_size as usize));
-                    update_display = true;
-                }
+                let index = index.min(data_len);
+                data_view.end = index;
+                data_view.start = data_view
+                    .start
+                    .min(data_view.end.saturating_sub(sidebar_size as usize));
+                update_display = true;
             }
         }
         if rt.just_pressed_key(KeyCode::Backslash) {

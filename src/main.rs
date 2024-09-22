@@ -42,7 +42,7 @@ fn main() {
     .init();
     let data = File::open(std::env::args().nth(1).unwrap()).unwrap();
     let data = std::io::BufReader::new(data);
-    let mut data = data.bytes().map(|x| x.unwrap()).collect_vec();
+    let mut data = data.bytes().map(Result::unwrap).collect_vec();
     let data_len = data.len();
     data.extend(std::iter::repeat(0).take(256));
     let data_buffer = DEVICE.create_buffer_from_slice(&data);
@@ -57,7 +57,7 @@ fn main() {
             let c = data.read(index + 2).cast_u32();
             histo_buffer
                 .atomic_ref(a + b * 256 + c * 65536)
-                .fetch_add(1);
+                .fetch_add(stride);
         }));
     let update_histo_slices_kernel = DEVICE.create_kernel_async::<fn(Buffer<u8>, u32, u32)>(
         &track!(|data, stride, time_stride| {
@@ -66,7 +66,7 @@ fn main() {
             let b = data.read(index + 1).cast_u32();
             histo_buffer
                 .atomic_ref(a + b * 256 + dispatch_id().y * 65536)
-                .fetch_add(1);
+                .fetch_add(stride);
         }),
     );
 
@@ -193,7 +193,7 @@ fn main() {
             auto_rotate = !auto_rotate;
         }
         if auto_rotate {
-            horiz_angle += 0.007;
+            horiz_angle += 0.003;
         }
 
         if rt.pressed_key(KeyCode::KeyA) {

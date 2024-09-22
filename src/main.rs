@@ -240,7 +240,8 @@ fn main() {
                 second_view.start = index;
                 second_view.end = second_view
                     .end
-                    .max(second_view.start + display_size as usize * sidebar_size as usize);
+                    .max(second_view.start + display_size as usize * sidebar_size as usize)
+                    .min(data_len);
                 sidebar_vert_stride = sidebar_size
                     * (second_view.len() as u32 / sidebar_size / display_size)
                     + sidebar_size;
@@ -248,7 +249,10 @@ fn main() {
                 let index = pos.y as usize * sidebar_vert_stride as usize + second_view.start;
                 let index = index.min(data_len);
                 data_view.start = index;
-                data_view.end = data_view.end.max(data_view.start + sidebar_size as usize);
+                data_view.end = data_view
+                    .end
+                    .max(data_view.start + sidebar_size as usize)
+                    .min(data_len);
                 update_display = true;
             }
         }

@@ -123,9 +123,6 @@ fn main() {
             let tmin = luisa::min(t0, t1).reduce_max();
             let tmax = luisa::max(t0, t1).reduce_min();
             if tmin > tmax {
-                // if tmin - tmax < 2.0 {
-                //     app.display().write(dispatch_id().xy(), Vec3::splat(1.0));
-                // }
                 return;
             }
 
@@ -289,10 +286,10 @@ fn main() {
             data_view.end += sidebar_vert_stride as usize;
             update_display = true;
             data_view.end = data_view.end.min(data_len);
-            // if data_view.end == data_len {
-            //     seeking = false;
-            // }
             data_view.start = data_view.start.min(data_view.end);
+            if data_view.start == data_len {
+                seeking = false;
+            }
         }
 
         let start = FVec3::new(
